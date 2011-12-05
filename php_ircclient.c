@@ -155,8 +155,15 @@ zend_object_value php_ircclient_session_object_create(zend_class_entry *ce TSRML
 	php_ircclient_session_object_t *obj;
 
 	obj = ecalloc(1, sizeof(*obj));
+#ifdef ZEND_ENGINE_2_4
 	zend_object_std_init((zend_object *) obj, ce TSRMLS_CC);
 	object_properties_init((zend_object *) obj, ce);
+#else
+    obj->zo.ce = ce;
+    ALLOC_HASHTABLE(obj->zo.properties);
+    zend_hash_init(obj->zo.properties, zend_hash_num_elements(&ce->default_properties), NULL, ZVAL_PTR_DTOR, 0);
+    zend_hash_copy(obj->zo.properties, &ce->default_properties, (copy_ctor_func_t) zval_add_ref, NULL, sizeof(zval *));
+#endif
 
 	obj->sess = irc_create_session(&php_ircclient_callbacks);
 	irc_set_ctx(obj->sess, obj);
@@ -718,12 +725,12 @@ PHP_METHOD(Session, onTopic) {}
 PHP_METHOD(Session, onKick) {}
 PHP_METHOD(Session, onChannel) {}
 PHP_METHOD(Session, onPrivmsg) {}
-PHP_METHOD(Session, onNOTICE) {}
+PHP_METHOD(Session, onNotice) {}
 PHP_METHOD(Session, onChannelNotice) {}
 PHP_METHOD(Session, onInvite) {}
 PHP_METHOD(Session, onCtcpReq) {}
 PHP_METHOD(Session, onCtcpRep) {}
-PHP_METHOD(Session, onCtcpAction) {}
+PHP_METHOD(Session, onAction) {}
 PHP_METHOD(Session, onUnknown) {}
 PHP_METHOD(Session, onNumeric) {}
 PHP_METHOD(Session, onDccChatReq) {}
@@ -771,12 +778,12 @@ zend_function_entry php_ircclient_session_method_entry[] = {
 	ME(onKick)
 	ME(onChannel)
 	ME(onPrivmsg)
-	ME(onNOTICE)
+	ME(onNotice)
 	ME(onChannelNotice)
 	ME(onInvite)
 	ME(onCtcpReq)
 	ME(onCtcpRep)
-	ME(onCtcpAction)
+	ME(onAction)
 	ME(onUnknown)
 	ME(onNumeric)
 	ME(onDccChatReq)
