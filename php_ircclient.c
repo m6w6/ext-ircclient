@@ -24,6 +24,7 @@
 
 #include "php.h"
 #include "php_ini.h"
+#include "php_network.h"
 #include "ext/standard/php_string.h"
 #include "ext/standard/info.h"
 
@@ -31,6 +32,7 @@
 
 #include "php_ircclient.h"
 
+#include <errno.h>
 #include <ctype.h>
 #include <libircclient/libircclient.h>
 
@@ -155,7 +157,7 @@ zend_object_value php_ircclient_session_object_create(zend_class_entry *ce TSRML
 	php_ircclient_session_object_t *obj;
 
 	obj = ecalloc(1, sizeof(*obj));
-#ifdef ZEND_ENGINE_2_4
+#if PHP_VERSION_ID >= 50399
 	zend_object_std_init((zend_object *) obj, ce TSRMLS_CC);
 	object_properties_init((zend_object *) obj, ce);
 #else
@@ -394,16 +396,153 @@ PHP_METHOD(Session, disconnect)
 
 PHP_METHOD(Session, run)
 {
-	if (SUCCESS == zend_parse_parameters_none()) {
+	HashTable *ifds = NULL, *ofds = NULL;
+	double to = 0.25;
+
+	if (SUCCESS == zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "|H!H!d", &ifds, &ofds, &to)) {
 		php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
 
-		if (0 != irc_run(obj->sess)) {
-			int err = irc_errno(obj->sess);
+		if ((ifds && zend_hash_num_elements(ifds)) || (ofds && zend_hash_num_elements(ofds))) {
+			struct timeval t;
+			fd_set i, o;
+			int m = 0;
+			zval **zfd, *zr, *zw;
 
-			if (err) {
-				php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(err));
+			FD_ZERO(&i);
+			FD_ZERO(&o);
+
+			if (0 != irc_add_select_descriptors(obj->sess, &i, &o, &m)) {
+				php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(irc_errno(obj->sess)));
+				RETURN_FALSE;
+			}
+			if (ifds) {
+				for (	zend_hash_internal_pointer_reset(ifds);
+						SUCCESS == zend_hash_get_current_data(ifds, (void *) &zfd);
+						zend_hash_move_forward(ifds)
+				) {
+					if (Z_TYPE_PP(zfd) == IS_RESOURCE) {
+						php_stream *s = NULL;
+						int fd = -1;
+
+						php_stream_from_zval_no_verify(s, zfd);
+
+						if (!s || SUCCESS != php_stream_cast(s, PHP_STREAM_AS_FD_FOR_SELECT, (void *) &fd, 1) || fd == -1) {
+							php_error_docref(NULL TSRMLS_CC, E_NOTICE, "invalid resource");
+						} else {
+							PHP_SAFE_FD_SET(fd, &i);
+							if (m < fd) {
+								m = fd;
+							}
+						}
+					}
+				}
+			}
+			if (ofds) {
+				for (	zend_hash_internal_pointer_reset(ofds);
+						SUCCESS == zend_hash_get_current_data(ofds, (void *) &zfd);
+						zend_hash_move_forward(ofds)
+				) {
+					if (Z_TYPE_PP(zfd) == IS_RESOURCE) {
+						php_stream *s = NULL;
+						int fd = -1;
+
+						php_stream_from_zval_no_verify(s, zfd);
+
+						if (!s || SUCCESS != php_stream_cast(s, PHP_STREAM_AS_FD_FOR_SELECT|PHP_STREAM_CAST_INTERNAL, (void *) &fd, 1) || fd == -1) {
+							php_error_docref(NULL TSRMLS_CC, E_NOTICE, "invalid resource");
+						} else {
+							PHP_SAFE_FD_SET(fd, &o);
+							if (m < fd) {
+								m = fd;
+							}
+						}
+					}
+				}
+			}
+
+			PHP_SAFE_MAX_FD(m, m);
+
+			t.tv_sec = (time_t) to;
+			t.tv_usec = (suseconds_t) ((to - t.tv_sec) * 1000000.0);
+
+			if (0 > select(m + 1, &i, &o, NULL, &t) && errno != EINTR) {
+				php_error_docref(NULL TSRMLS_CC, E_WARNING, "select() error: %s", strerror(errno));
+				RETURN_FALSE;
+			}
+
+			if (0 != irc_process_select_descriptors(obj->sess, &i, &o)) {
+				int err = irc_errno(obj->sess);
+
+				if (err) {
+					php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(err));
+					RETURN_FALSE;
+				}
+			}
+
+			array_init(return_value);
+			MAKE_STD_ZVAL(zr);
+			array_init(zr);
+			MAKE_STD_ZVAL(zw);
+			array_init(zw);
+
+			if (ifds) {
+				for (	zend_hash_internal_pointer_reset(ifds);
+						SUCCESS == zend_hash_get_current_data(ifds, (void *) &zfd);
+						zend_hash_move_forward(ifds)
+				) {
+					if (Z_TYPE_PP(zfd) == IS_RESOURCE) {
+						php_stream *s = NULL;
+						int fd = -1;
+
+						php_stream_from_zval_no_verify(s, zfd);
+
+						if (s && SUCCESS == php_stream_cast(s, PHP_STREAM_AS_FD_FOR_SELECT|PHP_STREAM_CAST_INTERNAL, (void *) &fd, 1) && fd != -1) {
+							if (PHP_SAFE_FD_ISSET(fd, &i)) {
+								Z_ADDREF_PP(zfd);
+								add_next_index_zval(zr, *zfd);
+							}
+						}
+					}
+				}
+			}
+			if (ofds) {
+				for (	zend_hash_internal_pointer_reset(ofds);
+						SUCCESS == zend_hash_get_current_data(ofds, (void *) &zfd);
+						zend_hash_move_forward(ofds)
+				) {
+					if (Z_TYPE_PP(zfd) == IS_RESOURCE) {
+						php_stream *s = NULL;
+						int fd = -1;
+
+						php_stream_from_zval_no_verify(s, zfd);
+
+						if (s && SUCCESS == php_stream_cast(s, PHP_STREAM_AS_FD_FOR_SELECT|PHP_STREAM_CAST_INTERNAL, (void *) &fd, 1) && fd != -1) {
+							if (PHP_SAFE_FD_ISSET(fd, &o)) {
+								Z_ADDREF_PP(zfd);
+								add_next_index_zval(zw, *zfd);
+							}
+						}
+					}
+				}
+			}
+
+			add_next_index_zval(return_value, zr);
+			add_next_index_zval(return_value, zw);
+
+			return;
+
+		} else {
+			if (0 != irc_run(obj->sess)) {
+				int err = irc_errno(obj->sess);
+
+				if (err) {
+					php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(err));
+					RETURN_FALSE;
+				}
 			}
 		}
+
+		RETURN_TRUE;
 	}
 }
 
@@ -735,6 +874,7 @@ PHP_METHOD(Session, onUnknown) {}
 PHP_METHOD(Session, onNumeric) {}
 PHP_METHOD(Session, onDccChatReq) {}
 PHP_METHOD(Session, onDccSendReq) {}
+PHP_METHOD(Session, onError) {}
 
 #define ME(m) PHP_ME(Session, m, NULL, ZEND_ACC_PUBLIC)
 
@@ -788,6 +928,7 @@ zend_function_entry php_ircclient_session_method_entry[] = {
 	ME(onNumeric)
 	ME(onDccChatReq)
 	ME(onDccSendReq)
+	ME(onError)
 	PHP_FE_END
 };
 
@@ -803,6 +944,142 @@ PHP_MINIT_FUNCTION(ircclient)
 	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("nick"), ZEND_ACC_PUBLIC TSRMLS_CC);
 	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("user"), ZEND_ACC_PUBLIC TSRMLS_CC);
 	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("real"), ZEND_ACC_PUBLIC TSRMLS_CC);
+
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WELCOME", 001, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_YOURHOST", 002, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_CREATED", 003, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_MYINFO", 004, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_BOUNCE", 005, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_USERHOST", 302, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ISON", 303, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_AWAY", 301, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_UNAWAY", 305, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_NOWAWAY", 306, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WHOISUSER", 311, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WHOISSERVER", 312, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WHOISOPERATOR", 313, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WHOISIDLE", 317, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFWHOIS", 318, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WHOISCHANNELS", 319, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WHOWASUSER", 314, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFWHOWAS", 369, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LIST", 322, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LISTEND", 323, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_UNIQOPIS", 325, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_CHANNELMODEIS", 324, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_NOTOPIC", 331, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TOPIC", 332, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_INVITING", 341, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_SUMMONING", 342, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_INVITELIST", 346, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFINVITELIST", 347, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_EXCEPTLIST", 348, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFEXCEPTLIST", 349, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_VERSION", 351, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WHOREPLY", 352, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFWHO", 315, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_NAMREPLY", 353, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFNAMES", 366, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LINKS", 364, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFLINKS", 365, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_BANLIST", 367, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFBANLIST", 368, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_INFO", 371, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFINFO", 374, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_MOTDSTART", 375, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_MOTD", 372, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFMOTD", 376, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_YOUREOPER", 381, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_REHASHING", 382, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_YOURESERVICE", 383, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TIME", 391, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_USERSSTART", 392, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_USERS", 393, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFUSERS", 394, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_NOUSERS", 395, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACELINK", 200, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACECONNECTING", 201, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACEHANDSHAKE", 202, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACEUNKNOWN", 203, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACEOPERATOR", 204, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACEUSER", 205, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACESERVER", 206, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACESERVICE", 207, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACENEWTYPE", 208, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACECLASS", 209, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACELOG", 261, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRACEEND", 262, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_STATSLINKINFO", 211, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_STATSCOMMANDS", 212, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ENDOFSTATS", 219, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_STATSUPTIME", 242, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_STATSOLINE", 243, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_UMODEIS", 221, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_SERVLIST", 234, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_SERVLISTEND", 235, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LUSERCLIENT", 251, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LUSEROP", 252, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LUSERUNKNOWN", 253, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LUSERCHANNELS", 254, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_LUSERME", 255, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ADMINME", 256, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ADMINLOC1", 257, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ADMINLOC2", 258, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_ADMINEMAIL", 259, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_TRYAGAIN", 263, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOSUCHNICK", 401, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOSUCHSERVER", 402, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOSUCHCHANNEL", 403, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_CANNOTSENDTOCHAN", 404, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_TOOMANYCHANNELS", 405, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_WASNOSUCHNICK", 406, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_TOOMANYTARGETS", 407, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOSUCHSERVICE", 408, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOORIGIN", 409, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NORECIPIENT", 411, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOTEXTTOSEND", 412, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOTOPLEVEL", 413, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_WILDTOPLEVEL", 414, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_BADMASK", 415, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_UNKNOWNCOMMAND", 421, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOMOTD", 422, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOADMININFO", 423, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_FILEERROR", 424, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NONICKNAMEGIVEN", 431, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_ERRONEUSNICKNAME", 432, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NICKNAMEINUSE", 433, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NICKCOLLISION", 436, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_UNAVAILRESOURCE", 437, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_USERNOTINCHANNEL", 441, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOTONCHANNEL", 442, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_USERONCHANNEL", 443, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOLOGIN", 444, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_SUMMONDISABLED", 445, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_USERSDISABLED", 446, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOTREGISTERED", 451, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NEEDMOREPARAMS", 461, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_ALREADYREGISTRED", 462, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOPERMFORHOST", 463, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_PASSWDMISMATCH", 464, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_YOUREBANNEDCREEP", 465, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_YOUWILLBEBANNED", 466, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_KEYSET", 467, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_CHANNELISFULL", 471, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_UNKNOWNMODE", 472, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_INVITEONLYCHAN", 473, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_BANNEDFROMCHAN", 474, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_BADCHANNELKEY", 475, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_BADCHANMASK", 476, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOCHANMODES", 477, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_BANLISTFULL", 478, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOPRIVILEGES", 481, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_CHANOPRIVSNEEDED", 482, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_CANTKILLSERVER", 483, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_RESTRICTED", 484, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_UNIQOPPRIVSNEEDED", 485, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_NOOPERHOST", 491, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_UMODEUNKNOWNFLAG", 501, CONST_CS|CONST_PERSISTENT);
+	REGISTER_NS_LONG_CONSTANT("irc\\client", "ERR_USERSDONTMATCH", 502, CONST_CS|CONST_PERSISTENT);
 
 	return SUCCESS;
 }
