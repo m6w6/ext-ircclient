@@ -1,22 +1,3 @@
-/*
-  +----------------------------------------------------------------------+
-  | PHP Version 5                                                        |
-  +----------------------------------------------------------------------+
-  | Copyright (c) 1997-2011 The PHP Group                                |
-  +----------------------------------------------------------------------+
-  | This source file is subject to version 3.01 of the PHP license,      |
-  | that is bundled with this package in the file LICENSE, and is        |
-  | available through the world-wide-web at the following url:           |
-  | http://www.php.net/license/3_01.txt                                  |
-  | If you did not receive a copy of the PHP license and are unable to   |
-  | obtain it through the world-wide-web, please send a note to          |
-  | license@php.net so we can mail you a copy immediately.               |
-  +----------------------------------------------------------------------+
-  | Author:                                                              |
-  +----------------------------------------------------------------------+
-*/
-
-/* $Id: header 310447 2011-04-23 21:14:10Z bjori $ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -161,10 +142,10 @@ zend_object_value php_ircclient_session_object_create(zend_class_entry *ce TSRML
 	zend_object_std_init((zend_object *) obj, ce TSRMLS_CC);
 	object_properties_init((zend_object *) obj, ce);
 #else
-    obj->zo.ce = ce;
-    ALLOC_HASHTABLE(obj->zo.properties);
-    zend_hash_init(obj->zo.properties, zend_hash_num_elements(&ce->default_properties), NULL, ZVAL_PTR_DTOR, 0);
-    zend_hash_copy(obj->zo.properties, &ce->default_properties, (copy_ctor_func_t) zval_add_ref, NULL, sizeof(zval *));
+	obj->zo.ce = ce;
+	ALLOC_HASHTABLE(obj->zo.properties);
+	zend_hash_init(obj->zo.properties, zend_hash_num_elements(&ce->default_properties), NULL, ZVAL_PTR_DTOR, 0);
+	zend_hash_copy(obj->zo.properties, &ce->default_properties, (copy_ctor_func_t) zval_add_ref, NULL, sizeof(zval *));
 #endif
 
 	obj->sess = irc_create_session(&php_ircclient_callbacks);
