@@ -832,7 +832,22 @@ PHP_METHOD(Session, doCtcpRequest)
 	}
 }
 
+PHP_METHOD(Session, doRaw)
+{
+	char *msg_str;
+	int msg_len;
 
+	if (SUCCESS == zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &msg_str, &msg_len)) {
+		php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
+
+		if (0 != irc_send_raw(obj->sess, "%.*s", msg_len, msg_str)) {
+			php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(irc_errno(obj->sess)));
+			RETVAL_FALSE;
+		} else {
+			RETVAL_TRUE;
+		}
+	}
+}
 
 PHP_METHOD(Session, onConnect) {}
 PHP_METHOD(Session, onNick) {}
@@ -887,6 +902,8 @@ zend_function_entry php_ircclient_session_method_entry[] = {
 
 	ME(doCtcpReply)
 	ME(doCtcpRequest)
+
+	ME(doRaw)
 
 	ME(onConnect)
 	ME(onNick)
