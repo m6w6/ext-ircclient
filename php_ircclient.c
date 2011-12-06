@@ -79,7 +79,7 @@ done:
 
 const zend_function_entry php_ircclient_function_entry[] = {
 	ZEND_NS_FENTRY("irc\\client", parse_origin, ZEND_FN(parse_origin), NULL, 0)
-	PHP_FE_END
+	{0}
 };
 
 zend_module_entry ircclient_module_entry = {
@@ -929,7 +929,7 @@ zend_function_entry php_ircclient_session_method_entry[] = {
 	ME(onDccChatReq)
 	ME(onDccSendReq)
 	ME(onError)
-	PHP_FE_END
+	{0}
 };
 
 PHP_MINIT_FUNCTION(ircclient)
