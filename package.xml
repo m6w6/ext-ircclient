@@ -11,7 +11,7 @@
 			http://pear.php.net/dtd/package-2.0.xsd">
  <name>ircclient</name>
  <channel>pecl.php.net</channel>
- <summary>Asynchronous Resolver</summary>
+ <summary>IRC Client</summary>
  <description>
   Binding for the ircclient library.
  </description>
