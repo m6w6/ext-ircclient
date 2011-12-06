@@ -653,7 +653,7 @@ PHP_METHOD(Session, doChannelMode)
 	if (SUCCESS == zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s|s!", &chan_str, &chan_len, &mode_str, &mode_len)) {
 		php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
 
-		if (0 != irc_cmd_topic(obj->sess, chan_str, mode_str)) {
+		if (0 != irc_cmd_channel_mode(obj->sess, chan_str, mode_str)) {
 			php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(irc_errno(obj->sess)));
 			RETVAL_FALSE;
 		} else {
