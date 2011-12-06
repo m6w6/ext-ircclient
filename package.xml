@@ -23,7 +23,7 @@
  </lead>
  <date>2011-12-06</date>
  <version>
-  <release>0.1.0</release>
+  <release>0.1.1</release>
   <api>0.1.0</api>
  </version>
  <stability>
@@ -32,7 +32,7 @@
  </stability>
  <license>BSD, revised</license>
  <notes><![CDATA[
-Initial release
+Fixed PHP-5.3 build
 ]]></notes>
  <contents>
   <dir name="/">
