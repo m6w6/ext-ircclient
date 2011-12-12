@@ -1,15 +1,29 @@
+/*
+    +--------------------------------------------------------------------+
+    | PECL :: ircclient                                                  |
+    +--------------------------------------------------------------------+
+    | Redistribution and use in source and binary forms, with or without |
+    | modification, are permitted provided that the conditions mentioned |
+    | in the accompanying LICENSE file are met.                          |
+    +--------------------------------------------------------------------+
+    | Copyright (c) 2011, Michael Wallner <mike@php.net>                 |
+    +--------------------------------------------------------------------+
+*/
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
-#include "php.h"
-#include "php_ini.h"
-#include "php_network.h"
-#include "ext/standard/php_string.h"
-#include "ext/standard/info.h"
+#include <main/php.h>
+#include <main/php_config.h>
+#include <main/php_ini.h>
+#include <main/php_network.h>
+#include <ext/standard/php_string.h>
+#include <ext/standard/info.h>
 
-#include "zend_interfaces.h"
+#include <Zend/zend.h>
+#include <Zend/zend_constants.h>
+#include <Zend/zend_interfaces.h>
 
 #include "php_ircclient.h"
 
@@ -63,16 +77,19 @@ const zend_function_entry php_ircclient_function_entry[] = {
 	{0}
 };
 
+PHP_MINIT_FUNCTION(ircclient);
+PHP_MINFO_FUNCTION(ircclient);
+
 zend_module_entry ircclient_module_entry = {
 	STANDARD_MODULE_HEADER,
 	"ircclient",
 	php_ircclient_function_entry,
 	PHP_MINIT(ircclient),
-	PHP_MSHUTDOWN(ircclient),
-	PHP_RINIT(ircclient),	
-	PHP_RSHUTDOWN(ircclient),
+	NULL,
+	NULL,
+	NULL,
 	PHP_MINFO(ircclient),
-	"0.1.0",
+	PHP_IRCCLIENT_VERSION,
 	STANDARD_MODULE_PROPERTIES
 };
 
@@ -1082,33 +1099,31 @@ PHP_MINIT_FUNCTION(ircclient)
 	return SUCCESS;
 }
 
-
-PHP_MSHUTDOWN_FUNCTION(ircclient)
-{
-	return SUCCESS;
-}
-
-
-
-PHP_RINIT_FUNCTION(ircclient)
-{
-	return SUCCESS;
-}
-
-
-
-PHP_RSHUTDOWN_FUNCTION(ircclient)
-{
-	return SUCCESS;
-}
-
-
 PHP_MINFO_FUNCTION(ircclient)
 {
+	unsigned int high, low;
+	char *version[2];
+
+	irc_get_version(&high, &low);
+	spprintf(&version[1], 0, "%u.%u", high, low);
+	spprintf(&version[0], 0, "%u.%u", PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH, PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW);
+
 	php_info_print_table_start();
-	php_info_print_table_header(2, "ircclient support", "enabled");
+	php_info_print_table_header(2, "IRC client support", "enabled");
+	php_info_print_table_row(2, "Version", PHP_IRCCLIENT_VERSION);
 	php_info_print_table_end();
 
+	php_info_print_table_start();
+	php_info_print_table_header(3, "Used Library", "compiled", "linked");
+	php_info_print_table_row(3,
+		"libircclient",
+		version[0],
+		version[1]
+	);
+	php_info_print_table_end();
+
+	efree(version[0]);
+	efree(version[1]);
 }
 
 

@@ -2,6 +2,9 @@ PHP_ARG_WITH(ircclient, for ircclient support,
 	[  --with-ircclient[=LIBIRCCLIENTDIR]   Include ircclient support])
 
 if test "$PHP_IRCCLIENT" != "no"; then
+	AC_PROG_EGREP
+	AC_PROG_SED
+	
 	AC_MSG_CHECKING([for libircclient/libircclient.h])
 	for d in $PHP_IRCCLIENT /usr /usr/local /opt; do
 		if test -f $d/include/libircclient/libircclient.h; then
@@ -13,6 +16,10 @@ if test "$PHP_IRCCLIENT" != "no"; then
 	if test "x$IRCCLIENT_DIR" = "x"; then
 		AC_MSG_ERROR([not found])
 	fi
+	PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH=`$EGREP "define LIBIRC_VERSION_HIGH" $IRCCLIENT_DIR/include/libircclient/libirc_params.h | $SED -e 's/[[^0-9\x]]//g'`
+	PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW=`$EGREP "define LIBIRC_VERSION_LOW" $IRCCLIENT_DIR/include/libircclient/libirc_params.h | $SED -e 's/[[^0-9\x]]//g'`
+	AC_DEFINE_UNQUOTED([PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH], [$PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH], [ ])
+	AC_DEFINE_UNQUOTED([PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW], [$PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW], [ ])
 	
 	PHP_ADD_INCLUDE($IRCCLIENT_DIR/include)
 	PHP_CHECK_LIBRARY(ircclient, irc_create_session,

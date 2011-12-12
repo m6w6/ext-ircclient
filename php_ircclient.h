@@ -1,36 +1,22 @@
+/*
+    +--------------------------------------------------------------------+
+    | PECL :: ircclient                                                  |
+    +--------------------------------------------------------------------+
+    | Redistribution and use in source and binary forms, with or without |
+    | modification, are permitted provided that the conditions mentioned |
+    | in the accompanying LICENSE file are met.                          |
+    +--------------------------------------------------------------------+
+    | Copyright (c) 2011, Michael Wallner <mike@php.net>                 |
+    +--------------------------------------------------------------------+
+*/
 
 #ifndef PHP_IRCCLIENT_H
 #define PHP_IRCCLIENT_H
 
+#define PHP_IRCCLIENT_VERSION "0.1.2"
+
 extern zend_module_entry ircclient_module_entry;
 #define phpext_ircclient_ptr &ircclient_module_entry
-
-#ifdef PHP_WIN32
-#	define PHP_IRCCLIENT_API __declspec(dllexport)
-#elif defined(__GNUC__) && __GNUC__ >= 4
-#	define PHP_IRCCLIENT_API __attribute__ ((visibility("default")))
-#else
-#	define PHP_IRCCLIENT_API
-#endif
-
-#ifdef ZTS
-#include "TSRM.h"
-#endif
-
-PHP_MINIT_FUNCTION(ircclient);
-PHP_MSHUTDOWN_FUNCTION(ircclient);
-PHP_RINIT_FUNCTION(ircclient);
-PHP_RSHUTDOWN_FUNCTION(ircclient);
-PHP_MINFO_FUNCTION(ircclient);
-
-
-
-
-#ifdef ZTS
-#define IRCCLIENT_G(v) TSRMG(ircclient_globals_id, zend_ircclient_globals *, v)
-#else
-#define IRCCLIENT_G(v) (ircclient_globals.v)
-#endif
 
 #endif
 
