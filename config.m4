@@ -22,6 +22,11 @@ if test "$PHP_IRCCLIENT" != "no"; then
 	AC_DEFINE_UNQUOTED([PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW], [$PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW], [ ])
 	
 	PHP_ADD_INCLUDE($IRCCLIENT_DIR/include)
+	AC_CHECK_MEMBER([irc_callbacks_t.event_channel_notice], [
+		AC_DEFINE(HAVE_LIBIRCCLIENT_EVENT_CHANNEL_NOTICE, 1, [ ])
+	], [], [
+		[#include <libircclient/libircclient.h>]
+	])
 	PHP_CHECK_LIBRARY(ircclient, irc_create_session,
 	[
 		PHP_ADD_LIBRARY_WITH_PATH(ircclient, $IRCCLIENT_DIR/lib, IRCCLIENT_SHARED_LIBADD)

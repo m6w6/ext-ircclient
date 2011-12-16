@@ -21,10 +21,10 @@
   <email>mike@php.net</email>
   <active>yes</active>
  </lead>
- <date>2011-12-12</date>
+ <date>2011-12-16</date>
  <version>
-  <release>0.1.2</release>
-  <api>0.1.0</api>
+  <release>0.2.0</release>
+  <api>0.2.0</api>
  </version>
  <stability>
   <release>beta</release>
@@ -32,7 +32,10 @@
  </stability>
  <license>BSD, revised</license>
  <notes><![CDATA[
-Added Session::doRaw(string msg)
+* Added argument info
+* Added support for closures
+* Use zend_fcall API for callbacks
+* Splitted up arguments to callbacks
 ]]></notes>
  <contents>
   <dir name="/">
@@ -56,6 +59,6 @@ Added Session::doRaw(string msg)
  </dependencies>
  <providesextension>ircclient</providesextension>
  <extsrcrelease>
-  <configureoption name="with-ircclient" prompt="whether to enable libircclient suport" default="yes"/>
+  <configureoption name="with-ircclient" prompt="whether to enable libircclient suport; set libircclient directory" default="yes"/>
  </extsrcrelease>
 </package>

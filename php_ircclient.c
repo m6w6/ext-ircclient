@@ -116,7 +116,9 @@ static irc_callbacks_t php_ircclient_callbacks = {
 	.event_channel = php_ircclient_event_callback,
 	.event_privmsg = php_ircclient_event_callback,
 	.event_notice = php_ircclient_event_callback,
-	/* .event_channel_notice = php_ircclient_event_callback, */
+#if PHP_IRCCLIENT_HAVE_EVENT_CHANNEL_NOTICE
+	.event_channel_notice = php_ircclient_event_callback,
+#endif
 	.event_invite = php_ircclient_event_callback,
 	.event_ctcp_req = php_ircclient_event_callback,
 	.event_ctcp_rep = php_ircclient_event_callback,
@@ -127,10 +129,18 @@ static irc_callbacks_t php_ircclient_callbacks = {
 	.event_dcc_send_req = php_ircclient_event_dcc_send_callback
 };
 
+typedef struct php_ircclient_session_callback {
+	zval *zfn;
+	zend_fcall_info fci;
+	zend_fcall_info_cache fcc;
+} php_ircclient_session_callback_t;
+
 typedef struct php_ircclient_session_object {
 	zend_object zo;
 	zend_object_value ov;
 	irc_session_t *sess;
+	unsigned opts;
+	HashTable cbc;
 #ifdef ZTS
 	void ***ts;
 #endif
@@ -146,8 +156,17 @@ void php_ircclient_session_object_free(void *object TSRMLS_DC)
 		irc_destroy_session(o->sess);
 		o->sess = NULL;
 	}
+	zend_hash_destroy(&o->cbc);
 	zend_object_std_dtor((zend_object *) o TSRMLS_CC);
 	efree(o);
+}
+
+static void php_ircclient_session_callback_dtor(void *ptr)
+{
+	php_ircclient_session_callback_t *cb = (php_ircclient_session_callback_t *) ptr;
+
+	zend_fcall_info_args_clear(&cb->fci, 1);
+	zval_ptr_dtor(&cb->zfn);
 }
 
 zend_object_value php_ircclient_session_object_create(zend_class_entry *ce TSRMLS_DC)
@@ -167,6 +186,7 @@ zend_object_value php_ircclient_session_object_create(zend_class_entry *ce TSRML
 
 	obj->sess = irc_create_session(&php_ircclient_callbacks);
 	irc_set_ctx(obj->sess, obj);
+	zend_hash_init(&obj->cbc, 10, NULL, php_ircclient_session_callback_dtor, 0);
 	TSRMLS_SET_CTX(obj->ts);
 
 	obj->ov.handle = zend_objects_store_put(obj, NULL, php_ircclient_session_object_free, NULL TSRMLS_CC);
@@ -175,11 +195,47 @@ zend_object_value php_ircclient_session_object_create(zend_class_entry *ce TSRML
 	return obj->ov;
 }
 
+static php_ircclient_session_callback_t *php_ircclient_session_get_callback(php_ircclient_session_object_t *obj, const char *fn_str, size_t fn_len)
+{
+	zval *zo, *zm;
+	php_ircclient_session_callback_t cb, *cbp = NULL;
+	TSRMLS_FETCH_FROM_CTX(obj->ts);
+
+	if (SUCCESS == zend_hash_find(&obj->cbc, fn_str, fn_len + 1, (void *) &cbp)) {
+		return cbp;
+	}
+
+	MAKE_STD_ZVAL(zo);
+	Z_TYPE_P(zo) = IS_OBJECT;
+	zo->value.obj = obj->ov;
+	zend_objects_store_add_ref(zo TSRMLS_CC);
+
+	MAKE_STD_ZVAL(zm);
+	ZVAL_STRINGL(zm, estrndup(fn_str, fn_len), fn_len, 0);
+
+	MAKE_STD_ZVAL(cb.zfn);
+	array_init_size(cb.zfn, 2);
+	add_next_index_zval(cb.zfn, zo);
+	add_next_index_zval(cb.zfn, zm);
+
+	if (SUCCESS != zend_fcall_info_init(cb.zfn, IS_CALLABLE_STRICT, &cb.fci, &cb.fcc, NULL, NULL TSRMLS_CC)) {
+		zval_ptr_dtor(&cb.zfn);
+		return NULL;
+	}
+
+	if (SUCCESS != zend_hash_add(&obj->cbc, fn_str, fn_len + 1, &cb, sizeof(cb), (void *) &cbp)) {
+		zval_ptr_dtor(&cb.zfn);
+		return NULL;
+	}
+
+	return cbp;
+}
+
 static void php_ircclient_event_callback(irc_session_t *session, const char *event, const char *origin, const char **params, unsigned int count)
 {
 	char *fn_str;
-	int i, fn_len;
-	zval *zo, *zr, *za;
+	int fn_len;
+	php_ircclient_session_callback_t *cb;
 	php_ircclient_session_object_t *obj = irc_get_ctx(session);
 	TSRMLS_FETCH_FROM_CTX(obj->ts);
 
@@ -193,120 +249,135 @@ static void php_ircclient_event_callback(irc_session_t *session, const char *eve
 		}
 	} while (*event++);
 
-	MAKE_STD_ZVAL(zo);
-	Z_TYPE_P(zo) = IS_OBJECT;
-	zo->value.obj = obj->ov;
-	zend_objects_store_add_ref(zo TSRMLS_CC);
+	if ((cb = php_ircclient_session_get_callback(obj, fn_str, fn_len -1))) {
+		int i;
+		zval *zo, *zp;
 
-	MAKE_STD_ZVAL(zr);
-	if (origin) {
-		ZVAL_STRING(zr, estrdup(origin), 0);
-	} else {
-		ZVAL_NULL(zr);
+		MAKE_STD_ZVAL(zo);
+		if (origin) {
+			ZVAL_STRING(zo, estrdup(origin), 0);
+		} else {
+			ZVAL_NULL(zo);
+		}
+
+		MAKE_STD_ZVAL(zp);
+		array_init(zp);
+		for (i = 0; i < count; ++i) {
+			add_next_index_string(zp, estrdup(params[i]), 0);
+		}
+
+		if (SUCCESS == zend_fcall_info_argn(&cb->fci TSRMLS_CC, 2, &zo, &zp)) {
+			zend_fcall_info_call(&cb->fci, &cb->fcc, NULL, NULL TSRMLS_CC);
+		}
+
+		zval_ptr_dtor(&zo);
+		zval_ptr_dtor(&zp);
 	}
-
-	MAKE_STD_ZVAL(za);
-	array_init(za);
-	for (i = 0; i < count; ++i) {
-		add_next_index_string(za, estrdup(params[i]), 0);
-	}
-
-	zend_call_method(&zo, NULL, NULL, fn_str, fn_len - 1, NULL, 2, zr, za TSRMLS_CC);
-
-	zval_ptr_dtor(&za);
-	zval_ptr_dtor(&zr);
-	zval_ptr_dtor(&zo);
 
 	efree(fn_str);
 }
 
 static void php_ircclient_event_code_callback(irc_session_t *session, unsigned int event, const char *origin, const char **params, unsigned int count)
 {
-	int i;
-	zval *zo, *zr, *zp, *za;
+	php_ircclient_session_callback_t *cb;
 	php_ircclient_session_object_t *obj = irc_get_ctx(session);
 	TSRMLS_FETCH_FROM_CTX(obj->ts);
 
-	MAKE_STD_ZVAL(zo);
-	Z_TYPE_P(zo) = IS_OBJECT;
-	zo->value.obj = obj->ov;
-	zend_objects_store_add_ref(zo TSRMLS_CC);
 
-	MAKE_STD_ZVAL(zr);
-	if (origin) {
-		ZVAL_STRING(zr, estrdup(origin), 0);
-	} else {
-		ZVAL_NULL(zr);
+	if ((cb = php_ircclient_session_get_callback(obj, ZEND_STRL("onNumeric")))) {
+		int i;
+		zval *zo, *ze, *zp;
+
+		MAKE_STD_ZVAL(zo);
+		if (origin) {
+			ZVAL_STRING(zo, estrdup(origin), 0);
+		} else {
+			ZVAL_NULL(zo);
+		}
+
+		MAKE_STD_ZVAL(ze);
+		ZVAL_LONG(ze, event);
+
+		MAKE_STD_ZVAL(zp);
+		array_init(zp);
+		for (i = 0; i < count; ++i) {
+			add_next_index_string(zp, estrdup(params[i]), 0);
+		}
+
+		if (SUCCESS == zend_fcall_info_argn(&cb->fci TSRMLS_CC, 3, &zo, &ze, &zp)) {
+			zend_fcall_info_call(&cb->fci, &cb->fcc, NULL, NULL TSRMLS_CC);
+		}
+
+		zval_ptr_dtor(&zp);
+		zval_ptr_dtor(&ze);
+		zval_ptr_dtor(&zo);
 	}
-
-	MAKE_STD_ZVAL(za);
-	array_init(za);
-	add_assoc_long_ex(za, ZEND_STRS("event"), event);
-
-	MAKE_STD_ZVAL(zp);
-	array_init(zp);
-	for (i = 0; i < count; ++i) {
-		add_next_index_string(zp, estrdup(params[i]), 0);
-	}
-	add_assoc_zval_ex(za, ZEND_STRS("params"), zp);
-
-	zend_call_method(&zo, NULL, NULL, ZEND_STRL("onnumeric"), NULL, 2, zr, za TSRMLS_CC);
-
-	zval_ptr_dtor(&zp);
-	zval_ptr_dtor(&za);
-	zval_ptr_dtor(&zr);
-	zval_ptr_dtor(&zo);
-
 }
 
 static void php_ircclient_event_dcc_chat_callback(irc_session_t *session, const char *nick, const char *addr, irc_dcc_t dccid)
 {
-	zval *zo, *zp;
+	php_ircclient_session_callback_t *cb;
 	php_ircclient_session_object_t *obj = irc_get_ctx(session);
 	TSRMLS_FETCH_FROM_CTX(obj->ts);
 
-	MAKE_STD_ZVAL(zo);
-	Z_TYPE_P(zo) = IS_OBJECT;
-	zo->value.obj = obj->ov;
-	zend_objects_store_add_ref(zo TSRMLS_CC);
+	if ((cb = php_ircclient_session_get_callback(obj, ZEND_STRL("onDccChatReq")))) {
+		zval *zn, *za, *zd;
 
-	MAKE_STD_ZVAL(zp);
-	array_init(zp);
-	add_assoc_string_ex(zp, ZEND_STRS("nick"), estrdup(nick), 0);
-	add_assoc_string_ex(zp, ZEND_STRS("remote_addr"), estrdup(addr), 0);
-	add_assoc_long_ex(zp, ZEND_STRS("dccid"), dccid);
+		MAKE_STD_ZVAL(zn);
+		ZVAL_STRING(zn, estrdup(nick), 0);
+		MAKE_STD_ZVAL(za);
+		ZVAL_STRING(za, estrdup(addr), 0);
+		MAKE_STD_ZVAL(zd);
+		ZVAL_LONG(zd, dccid);
 
-	zend_call_method(&zo, NULL, NULL, ZEND_STRS("ondccchatreq"), NULL, 1, zp, NULL TSRMLS_CC);
+		if (SUCCESS == zend_fcall_info_argn(&cb->fci TSRMLS_CC, 3, &zn, &za, &zd)) {
+			zend_fcall_info_call(&cb->fci, &cb->fcc, NULL, NULL TSRMLS_CC);
+		}
 
-	zval_ptr_dtor(&zp);
-	zval_ptr_dtor(&zo);
+		zval_ptr_dtor(&zd);
+		zval_ptr_dtor(&za);
+		zval_ptr_dtor(&zn);
+	}
 }
 
 static void php_ircclient_event_dcc_send_callback(irc_session_t *session, const char *nick, const char *addr, const char *filename, unsigned long size, irc_dcc_t dccid)
 {
-	zval *zo, *zp;
+	php_ircclient_session_callback_t *cb;
 	php_ircclient_session_object_t *obj = irc_get_ctx(session);
 	TSRMLS_FETCH_FROM_CTX(obj->ts);
 
-	MAKE_STD_ZVAL(zo);
-	Z_TYPE_P(zo) = IS_OBJECT;
-	zo->value.obj = obj->ov;
-	zend_objects_store_add_ref(zo TSRMLS_CC);
+	if ((cb = php_ircclient_session_get_callback(obj, ZEND_STRL("onDccChatReq")))) {
+		zval *zn, *za, *zf, *zs, *zd;
 
-	MAKE_STD_ZVAL(zp);
-	array_init(zp);
-	add_assoc_string_ex(zp, ZEND_STRS("nick"), estrdup(nick), 0);
-	add_assoc_string_ex(zp, ZEND_STRS("remote_addr"), estrdup(addr), 0);
-	add_assoc_string_ex(zp, ZEND_STRS("filename"), estrdup(filename), 0);
-	add_assoc_long_ex(zp, ZEND_STRS("filesize"), size);
-	add_assoc_long_ex(zp, ZEND_STRS("dccid"), dccid);
+		MAKE_STD_ZVAL(zn);
+		ZVAL_STRING(zn, estrdup(nick), 0);
+		MAKE_STD_ZVAL(za);
+		ZVAL_STRING(za, estrdup(addr), 0);
+		MAKE_STD_ZVAL(zf);
+		ZVAL_STRING(zf, estrdup(filename), 0);
+		MAKE_STD_ZVAL(zs);
+		ZVAL_LONG(zs, size);
+		MAKE_STD_ZVAL(zd);
+		ZVAL_LONG(zd, dccid);
 
-	zend_call_method(&zo, NULL, NULL, ZEND_STRL("ondccsendreq"), NULL, 1, zp, NULL TSRMLS_CC);
+		if (SUCCESS == zend_fcall_info_argn(&cb->fci TSRMLS_CC, 5, &zn, &za, &zf, &zs, &zd)) {
+			zend_fcall_info_call(&cb->fci, &cb->fcc, NULL, NULL TSRMLS_CC);
+		}
 
-	zval_ptr_dtor(&zp);
-	zval_ptr_dtor(&zo);
+		zval_ptr_dtor(&zd);
+		zval_ptr_dtor(&zs);
+		zval_ptr_dtor(&zf);
+		zval_ptr_dtor(&za);
+		zval_ptr_dtor(&zn);
+	}
 }
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session___construct, 0, 0, 0)
+	ZEND_ARG_INFO(0, nick)
+	ZEND_ARG_INFO(0, user)
+	ZEND_ARG_INFO(0, real)
+ZEND_END_ARG_INFO()
+/* {{{ proto void Session::__construct([string nick[, string user[, string real]]]) */
 PHP_METHOD(Session, __construct)
 {
 	char *nick_str = NULL, *user_str = NULL, *real_str = NULL;
@@ -324,7 +395,16 @@ PHP_METHOD(Session, __construct)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doConnect, 0, 0, 2)
+	ZEND_ARG_INFO(0, ip6)
+	ZEND_ARG_INFO(0, host)
+	ZEND_ARG_INFO(0, port)
+	ZEND_ARG_INFO(0, password)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doConnect(bool ip6, string host[, int port[, string password]])
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doConnect)
 {
 	char *server_str, *passwd_str = NULL;
@@ -373,7 +453,9 @@ PHP_METHOD(Session, doConnect)
 		zval_ptr_dtor(&zreal);
 	}
 }
+/* }}} */
 
+/* {{{ proto bool Session::isConnected() */
 PHP_METHOD(Session, isConnected)
 {
 	if (SUCCESS == zend_parse_parameters_none()) {
@@ -382,7 +464,9 @@ PHP_METHOD(Session, isConnected)
 		RETURN_BOOL(irc_is_connected(obj->sess));
 	}
 }
+/* }}} */
 
+/* {{{ proto void Session::disconnect() */
 PHP_METHOD(Session, disconnect)
 {
 	if (SUCCESS == zend_parse_parameters_none()) {
@@ -391,7 +475,15 @@ PHP_METHOD(Session, disconnect)
 		irc_disconnect(obj->sess);
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_run, 0, 0, 0)
+	ZEND_ARG_INFO(0, read_fd_array_for_select)
+	ZEND_ARG_INFO(0, write_fd_array_for_select)
+	ZEND_ARG_INFO(0, timeout_seconds)
+ZEND_END_ARG_INFO()
+/* {{{ proto array Session::run([array read_fds_for_select[, array write_fds_for_select[, double timeout]]])
+	Returns array(array of readable fds, array of writeable fds) or false on error. */
 PHP_METHOD(Session, run)
 {
 	HashTable *ifds = NULL, *ofds = NULL;
@@ -543,7 +635,13 @@ PHP_METHOD(Session, run)
 		RETURN_TRUE;
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_setOption, 0, 0, 1)
+	ZEND_ARG_INFO(0, option)
+	ZEND_ARG_INFO(0, enable)
+ZEND_END_ARG_INFO()
+/* {{{ proto void Session::setOption(int option[, bool enable = true]) */
 PHP_METHOD(Session, setOption)
 {
 	long opt;
@@ -553,13 +651,22 @@ PHP_METHOD(Session, setOption)
 		php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
 
 		if (onoff) {
+			obj->opts |= opt;
 			irc_option_set(obj->sess, opt);
 		} else {
+			obj->opts ^= opt;
 			irc_option_reset(obj->sess, opt);
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doJoin, 0, 0, 1)
+	ZEND_ARG_INFO(0, channel)
+	ZEND_ARG_INFO(0, password)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doJoin(string channel[, string password])
+	Returns TRUE when the command was successfully sent. */
 PHP_METHOD(Session, doJoin)
 {
 	char *chan_str, *key_str = NULL;
@@ -576,7 +683,13 @@ PHP_METHOD(Session, doJoin)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doPart, 0, 0, 1)
+	ZEND_ARG_INFO(0, channel)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doPart(string channel)
+	Returns TRUE when the command was successfully sent. */
 PHP_METHOD(Session, doPart)
 {
 	char *chan_str;
@@ -593,7 +706,14 @@ PHP_METHOD(Session, doPart)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doInvite, 0, 0, 2)
+	ZEND_ARG_INFO(0, nick)
+	ZEND_ARG_INFO(0, channel)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doInvite(string nick, string channel)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doInvite)
 {
 	char *chan_str, *nick_str;
@@ -610,7 +730,13 @@ PHP_METHOD(Session, doInvite)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doNames, 0, 0, 1)
+	ZEND_ARG_INFO(0, channel)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doNames(string channel)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doNames)
 {
 	char *chan_str;
@@ -627,7 +753,13 @@ PHP_METHOD(Session, doNames)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doList, 0, 0, 1)
+	ZEND_ARG_INFO(0, channel)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doList(string channel)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doList)
 {
 	char *chan_str;
@@ -644,7 +776,14 @@ PHP_METHOD(Session, doList)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doTopic, 0, 0, 1)
+	ZEND_ARG_INFO(0, channel)
+	ZEND_ARG_INFO(0, topic)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doTopic(string channel[, string topic])
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doTopic)
 {
 	char *chan_str, *topic_str = NULL;
@@ -661,7 +800,14 @@ PHP_METHOD(Session, doTopic)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doChannelMode, 0, 0, 1)
+	ZEND_ARG_INFO(0, channel)
+	ZEND_ARG_INFO(0, mode)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doChannelMode(string channel[, string mode])
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doChannelMode)
 {
 	char *chan_str, *mode_str = NULL;
@@ -678,7 +824,15 @@ PHP_METHOD(Session, doChannelMode)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doKick, 0, 0, 2)
+	ZEND_ARG_INFO(0, nick)
+	ZEND_ARG_INFO(0, channel)
+	ZEND_ARG_INFO(0, reason)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doKick(string nick, string channel[, string reason])
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doKick)
 {
 	char *chan_str, *nick_str, *reason_str = NULL;
@@ -695,7 +849,14 @@ PHP_METHOD(Session, doKick)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doMsg, 0, 0, 2)
+	ZEND_ARG_INFO(0, destination)
+	ZEND_ARG_INFO(0, message)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doMsg(string destination, string message)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doMsg)
 {
 	char *dest_str, *msg_str;
@@ -712,7 +873,14 @@ PHP_METHOD(Session, doMsg)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doMe, 0, 0, 2)
+	ZEND_ARG_INFO(0, destination)
+	ZEND_ARG_INFO(0, message)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doMe(string destination, string message)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doMe)
 {
 	char *dest_str, *msg_str;
@@ -729,7 +897,14 @@ PHP_METHOD(Session, doMe)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doNotice, 0, 0, 2)
+	ZEND_ARG_INFO(0, destination)
+	ZEND_ARG_INFO(0, message)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doNotice(string destination, string message)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doNotice)
 {
 	char *dest_str, *msg_str;
@@ -746,7 +921,13 @@ PHP_METHOD(Session, doNotice)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doQuit, 0, 0, 0)
+	ZEND_ARG_INFO(0, reason)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doQuit([string reason])
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doQuit)
 {
 	char *reason_str = NULL;
@@ -763,7 +944,13 @@ PHP_METHOD(Session, doQuit)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doUserMode, 0, 0, 0)
+	ZEND_ARG_INFO(0, mode)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doUserMode([string mode])
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doUserMode)
 {
 	char *mode_str = NULL;
@@ -780,7 +967,13 @@ PHP_METHOD(Session, doUserMode)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doNick, 0, 0, 1)
+	ZEND_ARG_INFO(0, nick)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doNick(string nick)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doNick)
 {
 	char *nick_str;
@@ -797,7 +990,13 @@ PHP_METHOD(Session, doNick)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doWhois, 0, 0, 0)
+	ZEND_ARG_INFO(0, nick)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doWhois([string nick])
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doWhois)
 {
 	char *nick_str = NULL;
@@ -814,7 +1013,14 @@ PHP_METHOD(Session, doWhois)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doCtcpReply, 0, 0, 2)
+	ZEND_ARG_INFO(0, nick)
+	ZEND_ARG_INFO(0, reply)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doCtcpReply(string nick, string reply)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doCtcpReply)
 {
 	char *nick_str, *reply_str;
@@ -831,7 +1037,14 @@ PHP_METHOD(Session, doCtcpReply)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doCtcpRequest, 0, 0, 2)
+	ZEND_ARG_INFO(0, nick)
+	ZEND_ARG_INFO(0, request)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doCtcpRequest(string nick, string request)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doCtcpRequest)
 {
 	char *nick_str, *request_str;
@@ -848,7 +1061,13 @@ PHP_METHOD(Session, doCtcpRequest)
 		}
 	}
 }
+/* }}} */
 
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_doRaw, 0, 0, 1)
+	ZEND_ARG_INFO(0, message)
+ZEND_END_ARG_INFO()
+/* {{{ proto bool Session::doRaw(string message)
+	Returns TRUE when the command was sent successfully. */
 PHP_METHOD(Session, doRaw)
 {
 	char *msg_str;
@@ -865,85 +1084,140 @@ PHP_METHOD(Session, doRaw)
 		}
 	}
 }
+/* }}} */
 
-PHP_METHOD(Session, onConnect) {}
-PHP_METHOD(Session, onNick) {}
-PHP_METHOD(Session, onQuit) {}
-PHP_METHOD(Session, onJoin) {}
-PHP_METHOD(Session, onPart) {}
-PHP_METHOD(Session, onMode) {}
-PHP_METHOD(Session, onUmode) {}
-PHP_METHOD(Session, onTopic) {}
-PHP_METHOD(Session, onKick) {}
-PHP_METHOD(Session, onChannel) {}
-PHP_METHOD(Session, onPrivmsg) {}
-PHP_METHOD(Session, onNotice) {}
-PHP_METHOD(Session, onChannelNotice) {}
-PHP_METHOD(Session, onInvite) {}
-PHP_METHOD(Session, onCtcpReq) {}
-PHP_METHOD(Session, onCtcpRep) {}
-PHP_METHOD(Session, onAction) {}
-PHP_METHOD(Session, onUnknown) {}
-PHP_METHOD(Session, onNumeric) {}
-PHP_METHOD(Session, onDccChatReq) {}
-PHP_METHOD(Session, onDccSendReq) {}
-PHP_METHOD(Session, onError) {}
+/* {{{ event_callbacks */
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_event, 0, 0, 2)
+	ZEND_ARG_INFO(0, origin)
+	ZEND_ARG_ARRAY_INFO(0, args, 0)
+ZEND_END_ARG_INFO()
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_event_code, 0, 0, 3)
+	ZEND_ARG_INFO(0, origin)
+	ZEND_ARG_INFO(0, event)
+	ZEND_ARG_ARRAY_INFO(0, args, 0)
+ZEND_END_ARG_INFO()
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_event_dcc_chat, 0, 0, 3)
+	ZEND_ARG_INFO(0, nick)
+	ZEND_ARG_INFO(0, remote_addr)
+	ZEND_ARG_INFO(0, dccid)
+ZEND_END_ARG_INFO()
+ZEND_BEGIN_ARG_INFO_EX(ai_Session_event_dcc_send, 0, 0, 5)
+	ZEND_ARG_INFO(0, nick)
+	ZEND_ARG_INFO(0, remote_addr)
+	ZEND_ARG_INFO(0, filename)
+	ZEND_ARG_INFO(0, size)
+	ZEND_ARG_INFO(0, dccid)
+ZEND_END_ARG_INFO()
 
-#define ME(m) PHP_ME(Session, m, NULL, ZEND_ACC_PUBLIC)
+static void call_closure(INTERNAL_FUNCTION_PARAMETERS, /* stupid non-const API */ char *prop_str, size_t prop_len)
+{
+	zval **params = ecalloc(ZEND_NUM_ARGS(), sizeof(zval *));
+	php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
+
+	if (obj->opts & LIBIRC_OPTION_DEBUG) {
+		zval za;
+
+		INIT_PZVAL(&za);
+		array_init(&za);
+
+		if (SUCCESS == zend_copy_parameters_array(ZEND_NUM_ARGS(), &za)) {
+			php_printf("ircclient: %s - ", prop_str);
+			zend_print_flat_zval_r(&za TSRMLS_CC);
+			php_printf("\n");
+		}
+		zval_dtor(&za);
+	}
+
+	if (SUCCESS == zend_get_parameters_array(ZEND_NUM_ARGS(), ZEND_NUM_ARGS(), params)) {
+		zval *prop = zend_read_property(Z_OBJCE_P(getThis()), getThis(), prop_str, prop_len, 0 TSRMLS_CC);
+
+		if (Z_TYPE_P(prop) != IS_NULL) {
+			call_user_function(NULL, NULL, prop, return_value, ZEND_NUM_ARGS(), params TSRMLS_CC);
+		}
+	}
+
+	efree(params);
+}
+
+PHP_METHOD(Session, onConnect) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onConnect")); }
+PHP_METHOD(Session, onNick) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onNick")); }
+PHP_METHOD(Session, onQuit) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onQuit")); }
+PHP_METHOD(Session, onJoin) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onJoin")); }
+PHP_METHOD(Session, onPart) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onPart")); }
+PHP_METHOD(Session, onMode) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onMode")); }
+PHP_METHOD(Session, onUmode) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onUmode")); }
+PHP_METHOD(Session, onTopic) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onTopic")); }
+PHP_METHOD(Session, onKick) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onKick")); }
+PHP_METHOD(Session, onChannel) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onChannel")); }
+PHP_METHOD(Session, onPrivmsg) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onPrivmsg")); }
+PHP_METHOD(Session, onNotice) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onNotice")); }
+PHP_METHOD(Session, onChannelNotice) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onChannelNotice")); }
+PHP_METHOD(Session, onInvite) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onInvite")); }
+PHP_METHOD(Session, onCtcpReq) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onCtcpReq")); }
+PHP_METHOD(Session, onCtcpRep) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onCtcpRep")); }
+PHP_METHOD(Session, onAction) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onAction")); }
+PHP_METHOD(Session, onUnknown) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onUnknown")); }
+PHP_METHOD(Session, onNumeric) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onNumeric")); }
+PHP_METHOD(Session, onDccChatReq) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onDccChatReq")); }
+PHP_METHOD(Session, onDccSendReq) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onDccSendReq")); }
+PHP_METHOD(Session, onError) { call_closure(INTERNAL_FUNCTION_PARAM_PASSTHRU, ZEND_STRL("onError")); }
+/* }}} */
+
+#define ME(m, ai) PHP_ME(Session, m, ai, ZEND_ACC_PUBLIC)
 
 zend_function_entry php_ircclient_session_method_entry[] = {
-	ME(__construct)
-	ME(doConnect)
-	ME(isConnected)
-	ME(disconnect)
-	ME(run)
-	ME(setOption)
+	ME(__construct, ai_Session___construct)
+	ME(doConnect, ai_Session_doConnect)
+	ME(isConnected, NULL)
+	ME(disconnect, NULL)
+	ME(run, ai_Session_run)
+	ME(setOption, ai_Session_setOption)
 
-	ME(doJoin)
-	ME(doPart)
-	ME(doInvite)
-	ME(doNames)
-	ME(doList)
-	ME(doTopic)
-	ME(doChannelMode)
-	ME(doKick)
+	ME(doJoin, ai_Session_doJoin)
+	ME(doPart, ai_Session_doPart)
+	ME(doInvite, ai_Session_doInvite)
+	ME(doNames, ai_Session_doNames)
+	ME(doList, ai_Session_doList)
+	ME(doTopic, ai_Session_doTopic)
+	ME(doChannelMode, ai_Session_doChannelMode)
+	ME(doKick, ai_Session_doKick)
 
-	ME(doMsg)
-	ME(doMe)
-	ME(doNotice)
+	ME(doMsg, ai_Session_doMsg)
+	ME(doMe, ai_Session_doMe)
+	ME(doNotice, ai_Session_doNotice)
 
-	ME(doQuit)
-	ME(doUserMode)
-	ME(doNick)
-	ME(doWhois)
+	ME(doQuit, ai_Session_doQuit)
+	ME(doUserMode, ai_Session_doUserMode)
+	ME(doNick, ai_Session_doNick)
+	ME(doWhois, ai_Session_doWhois)
 
-	ME(doCtcpReply)
-	ME(doCtcpRequest)
+	ME(doCtcpReply, ai_Session_doCtcpReply)
+	ME(doCtcpRequest, ai_Session_doCtcpRequest)
 
-	ME(doRaw)
+	ME(doRaw, ai_Session_doRaw)
 
-	ME(onConnect)
-	ME(onNick)
-	ME(onQuit)
-	ME(onJoin)
-	ME(onPart)
-	ME(onMode)
-	ME(onUmode)
-	ME(onTopic)
-	ME(onKick)
-	ME(onChannel)
-	ME(onPrivmsg)
-	ME(onNotice)
-	ME(onChannelNotice)
-	ME(onInvite)
-	ME(onCtcpReq)
-	ME(onCtcpRep)
-	ME(onAction)
-	ME(onUnknown)
-	ME(onNumeric)
-	ME(onDccChatReq)
-	ME(onDccSendReq)
-	ME(onError)
+	ME(onConnect, ai_Session_event)
+	ME(onNick, ai_Session_event)
+	ME(onQuit, ai_Session_event)
+	ME(onJoin, ai_Session_event)
+	ME(onPart, ai_Session_event)
+	ME(onMode, ai_Session_event)
+	ME(onUmode, ai_Session_event)
+	ME(onTopic, ai_Session_event)
+	ME(onKick, ai_Session_event)
+	ME(onChannel, ai_Session_event)
+	ME(onPrivmsg, ai_Session_event)
+	ME(onNotice, ai_Session_event)
+	ME(onChannelNotice, ai_Session_event)
+	ME(onInvite, ai_Session_event)
+	ME(onCtcpReq, ai_Session_event)
+	ME(onCtcpRep, ai_Session_event)
+	ME(onAction, ai_Session_event)
+	ME(onUnknown, ai_Session_event)
+	ME(onNumeric, ai_Session_event_code)
+	ME(onDccChatReq, ai_Session_event_dcc_chat)
+	ME(onDccSendReq, ai_Session_event_dcc_send)
+	ME(onError, ai_Session_event)
 	{0}
 };
 
@@ -959,6 +1233,29 @@ PHP_MINIT_FUNCTION(ircclient)
 	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("nick"), ZEND_ACC_PUBLIC TSRMLS_CC);
 	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("user"), ZEND_ACC_PUBLIC TSRMLS_CC);
 	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("real"), ZEND_ACC_PUBLIC TSRMLS_CC);
+
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onConnect"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onNick"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onQuit"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onJoin"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onPart"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onMode"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onUmode"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onTopic"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onKick"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onChannel"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onPrivmsg"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onNotice"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onChannelNotice"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onInvite"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onCtcpReq"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onCtcpRep"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onAction"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onUnknown"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onNumeric"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onDccChatReq"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onDccSendReq"), ZEND_ACC_PUBLIC TSRMLS_CC);
+	zend_declare_property_null(php_ircclient_session_class_entry, ZEND_STRL("onError"), ZEND_ACC_PUBLIC TSRMLS_CC);
 
 	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_WELCOME", 001, CONST_CS|CONST_PERSISTENT);
 	REGISTER_NS_LONG_CONSTANT("irc\\client", "RPL_YOURHOST", 002, CONST_CS|CONST_PERSISTENT);
