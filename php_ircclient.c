@@ -15,7 +15,6 @@
 #endif
 
 #include <main/php.h>
-#include <main/php_config.h>
 #include <main/php_ini.h>
 #include <main/php_network.h>
 #include <ext/standard/php_string.h>
@@ -24,6 +23,10 @@
 #include <Zend/zend.h>
 #include <Zend/zend_constants.h>
 #include <Zend/zend_interfaces.h>
+
+#ifdef ZTS
+#include <TSRM/TSRM.h>
+#endif
 
 #include "php_ircclient.h"
 
