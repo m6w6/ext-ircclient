@@ -6,14 +6,14 @@
     | modification, are permitted provided that the conditions mentioned |
     | in the accompanying LICENSE file are met.                          |
     +--------------------------------------------------------------------+
-    | Copyright (c) 2011, Michael Wallner <mike@php.net>                 |
+    | Copyright (c) 2014, Michael Wallner <mike@php.net>                 |
     +--------------------------------------------------------------------+
 */
 
 #ifndef PHP_IRCCLIENT_H
 #define PHP_IRCCLIENT_H
 
-#define PHP_IRCCLIENT_VERSION "0.3.0"
+#define PHP_IRCCLIENT_VERSION "0.3.1"
 
 extern zend_module_entry ircclient_module_entry;
 #define phpext_ircclient_ptr &ircclient_module_entry

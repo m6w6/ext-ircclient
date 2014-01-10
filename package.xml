@@ -23,7 +23,7 @@
  </lead>
  <date>2014-01-10</date>
  <version>
-  <release>0.3.0</release>
+  <release>0.3.1</release>
   <api>0.3.0</api>
  </version>
  <stability>
@@ -32,7 +32,8 @@
  </stability>
  <license>BSD, revised</license>
  <notes><![CDATA[
-* PECL release
+* Fixed some compile warnings (remi)
+* Fixed build portability problem (remi)
 ]]></notes>
  <contents>
   <dir name="/">

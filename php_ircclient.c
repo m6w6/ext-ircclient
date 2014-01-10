@@ -1418,14 +1418,15 @@ PHP_MINFO_FUNCTION(ircclient)
 {
 	unsigned int high, low;
 	char *version[2];
+	char lt16 = "<=1.6";
 
 	irc_get_version(&high, &low);
 	spprintf(&version[1], 0, "%u.%u", high, low);
 #if PHP_IPHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH
 	spprintf(&version[0], 0, "%u.%u", PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH, PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW);
 #else
-	/* version <= 1.6 doesn't exposed its version */
-	spprintf(&version[0], 0, "-");
+	/* version <= 1.6 doesn't expose its version */
+	version[0] = lt16;
 #endif
 	php_info_print_table_start();
 	php_info_print_table_header(2, "IRC client support", "enabled");
@@ -1441,7 +1442,9 @@ PHP_MINFO_FUNCTION(ircclient)
 	);
 	php_info_print_table_end();
 
-	efree(version[0]);
+	if (version[0] != lt16) {
+		efree(version[0]);
+	}
 	efree(version[1]);
 }
 
