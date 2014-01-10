@@ -19,6 +19,7 @@
 #include <main/php_network.h>
 #include <ext/standard/php_string.h>
 #include <ext/standard/info.h>
+#include <ext/standard/basic_functions.h>
 
 #include <Zend/zend.h>
 #include <Zend/zend_constants.h>
@@ -32,7 +33,7 @@
 
 #include <errno.h>
 #include <ctype.h>
-#include <libircclient/libircclient.h>
+#include <libircclient.h>
 
 PHP_FUNCTION(parse_origin)
 {
@@ -418,7 +419,7 @@ PHP_METHOD(Session, doConnect)
 	if (SUCCESS == zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "bs|ls!", &ip6, &server_str, &server_len, &port, &passwd_str, &passwd_len)) {
 		php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
 		char *nick = NULL, *user = NULL, *real = NULL;
-		zval *znick, *zuser, *zreal, *tmp;
+		zval *znick, *zuser, *zreal;
 
 		znick = zend_read_property(php_ircclient_session_class_entry, getThis(), ZEND_STRL("nick"), 0 TSRMLS_CC);
 		SEPARATE_ARG_IF_REF(znick);
@@ -1420,8 +1421,12 @@ PHP_MINFO_FUNCTION(ircclient)
 
 	irc_get_version(&high, &low);
 	spprintf(&version[1], 0, "%u.%u", high, low);
+#if PHP_IPHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH
 	spprintf(&version[0], 0, "%u.%u", PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH, PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW);
-
+#else
+	/* version <= 1.6 doesn't exposed its version */
+	spprintf(&version[0], 0, "-");
+#endif
 	php_info_print_table_start();
 	php_info_print_table_header(2, "IRC client support", "enabled");
 	php_info_print_table_row(2, "Version", PHP_IRCCLIENT_VERSION);
