@@ -19,6 +19,7 @@
 #include <main/php_network.h>
 #include <ext/standard/php_string.h>
 #include <ext/standard/info.h>
+#include <ext/standard/basic_functions.h>
 
 #include <Zend/zend.h>
 #include <Zend/zend_constants.h>
