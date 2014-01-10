@@ -485,18 +485,19 @@ ZEND_BEGIN_ARG_INFO_EX(ai_Session_run, 0, 0, 0)
 	ZEND_ARG_INFO(0, write_fd_array_for_select)
 	ZEND_ARG_INFO(0, timeout_seconds)
 ZEND_END_ARG_INFO()
-/* {{{ proto array Session::run([array read_fds_for_select[, array write_fds_for_select[, double timeout]]])
+/* {{{ proto array Session::run([array read_fds_for_select[, array write_fds_for_select[, double timeout = null]]])
 	Returns array(array of readable fds, array of writeable fds) or false on error. */
 PHP_METHOD(Session, run)
 {
 	HashTable *ifds = NULL, *ofds = NULL;
-	double to = 0.25;
+	double to = php_get_inf();
+	int connected;
 
 	if (SUCCESS == zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "|H!H!d", &ifds, &ofds, &to)) {
 		php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
 
-		if ((ifds && zend_hash_num_elements(ifds)) || (ofds && zend_hash_num_elements(ofds))) {
-			struct timeval t;
+		if (ifds || ofds) {
+			struct timeval t, *tp = NULL;
 			fd_set i, o;
 			int m = 0;
 			zval **zfd, *zr, *zw;
@@ -504,9 +505,11 @@ PHP_METHOD(Session, run)
 			FD_ZERO(&i);
 			FD_ZERO(&o);
 
-			if (0 != irc_add_select_descriptors(obj->sess, &i, &o, &m)) {
-				php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(irc_errno(obj->sess)));
-				RETURN_FALSE;
+			if ((connected = irc_is_connected(obj->sess))) {
+				if (0 != irc_add_select_descriptors(obj->sess, &i, &o, &m)) {
+					php_error_docref(NULL TSRMLS_CC, E_WARNING, "irc_add_select_descriptors: %s", irc_strerror(irc_errno(obj->sess)));
+					RETURN_FALSE;
+				}
 			}
 			if (ifds) {
 				for (	zend_hash_internal_pointer_reset(ifds);
@@ -554,25 +557,36 @@ PHP_METHOD(Session, run)
 			}
 
 			PHP_SAFE_MAX_FD(m, m);
+			array_init(return_value);
 
-			t.tv_sec = (time_t) to;
-			t.tv_usec = (suseconds_t) ((to - t.tv_sec) * 1000000.0);
+			if (to != php_get_inf()) {
+				t.tv_sec = (time_t) to;
+				t.tv_usec = (suseconds_t) ((to - t.tv_sec) * 1000000.0);
+				tp = &t;
+			}
 
-			if (0 > select(m + 1, &i, &o, NULL, &t) && errno != EINTR) {
+			if (0 > select(m + 1, &i, &o, NULL, tp)) {
+				if (errno == EINTR) {
+					/* interrupt; let userland be able to handle signals etc. */
+					return;
+				}
+
 				php_error_docref(NULL TSRMLS_CC, E_WARNING, "select() error: %s", strerror(errno));
 				RETURN_FALSE;
 			}
 
-			if (0 != irc_process_select_descriptors(obj->sess, &i, &o)) {
-				int err = irc_errno(obj->sess);
+			if (connected) {
+				if (0 != irc_process_select_descriptors(obj->sess, &i, &o)) {
+					int err = irc_errno(obj->sess);
 
-				if (err) {
-					php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(err));
-					RETURN_FALSE;
+					if (err) {
+						php_error_docref(NULL TSRMLS_CC, E_WARNING, "irc_process: %s", irc_strerror(err));
+						RETURN_FALSE;
+					}
 				}
 			}
 
-			array_init(return_value);
+
 			MAKE_STD_ZVAL(zr);
 			array_init(zr);
 			MAKE_STD_ZVAL(zw);
@@ -629,7 +643,7 @@ PHP_METHOD(Session, run)
 				int err = irc_errno(obj->sess);
 
 				if (err) {
-					php_error_docref(NULL TSRMLS_CC, E_WARNING, "%s", irc_strerror(err));
+					php_error_docref(NULL TSRMLS_CC, E_WARNING, "irc_run: %s", irc_strerror(err));
 					RETURN_FALSE;
 				}
 			}
