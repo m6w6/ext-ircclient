@@ -1421,7 +1421,7 @@ PHP_MINFO_FUNCTION(ircclient)
 
 	irc_get_version(&high, &low);
 	spprintf(&version[1], 0, "%u.%u", high, low);
-#if PHP_IPHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH
+#if PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH
 	spprintf(&version[0], 0, "%u.%u", PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH, PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW);
 #else
 	/* version <= 1.6 doesn't exposed its version */
