@@ -1138,7 +1138,7 @@ static void call_closure(INTERNAL_FUNCTION_PARAMETERS, /* stupid non-const API *
 		INIT_PZVAL(&za);
 		array_init(&za);
 
-		if (SUCCESS == zend_copy_parameters_array(ZEND_NUM_ARGS(), &za)) {
+		if (SUCCESS == zend_copy_parameters_array(ZEND_NUM_ARGS(), &za TSRMLS_CC)) {
 			php_printf("ircclient: %s - ", prop_str);
 			zend_print_flat_zval_r(&za TSRMLS_CC);
 			php_printf("\n");
@@ -1422,7 +1422,7 @@ PHP_MINFO_FUNCTION(ircclient)
 
 	irc_get_version(&high, &low);
 	spprintf(&version[1], 0, "%u.%u", high, low);
-#if PHP_IPHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH
+#if PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH
 	spprintf(&version[0], 0, "%u.%u", PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH, PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW);
 #else
 	/* version <= 1.6 doesn't expose its version */
