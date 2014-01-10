@@ -13,7 +13,7 @@
 #ifndef PHP_IRCCLIENT_H
 #define PHP_IRCCLIENT_H
 
-#define PHP_IRCCLIENT_VERSION "0.2.0"
+#define PHP_IRCCLIENT_VERSION "0.3.0"
 
 extern zend_module_entry ircclient_module_entry;
 #define phpext_ircclient_ptr &ircclient_module_entry

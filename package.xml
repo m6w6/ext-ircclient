@@ -21,10 +21,10 @@
   <email>mike@php.net</email>
   <active>yes</active>
  </lead>
- <date>2011-12-16</date>
+ <date>2014-01-10</date>
  <version>
-  <release>0.2.0</release>
-  <api>0.2.0</api>
+  <release>0.3.0</release>
+  <api>0.3.0</api>
  </version>
  <stability>
   <release>beta</release>
@@ -32,10 +32,7 @@
  </stability>
  <license>BSD, revised</license>
  <notes><![CDATA[
-* Added argument info
-* Added support for closures
-* Use zend_fcall API for callbacks
-* Splitted up arguments to callbacks
+* PECL release
 ]]></notes>
  <contents>
   <dir name="/">
