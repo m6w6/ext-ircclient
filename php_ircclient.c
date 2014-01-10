@@ -1138,7 +1138,7 @@ static void call_closure(INTERNAL_FUNCTION_PARAMETERS, /* stupid non-const API *
 		INIT_PZVAL(&za);
 		array_init(&za);
 
-		if (SUCCESS == zend_copy_parameters_array(ZEND_NUM_ARGS(), &za)) {
+		if (SUCCESS == zend_copy_parameters_array(ZEND_NUM_ARGS(), &za TSRMLS_CC)) {
 			php_printf("ircclient: %s - ", prop_str);
 			zend_print_flat_zval_r(&za TSRMLS_CC);
 			php_printf("\n");
