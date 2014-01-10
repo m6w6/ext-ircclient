@@ -1418,7 +1418,7 @@ PHP_MINFO_FUNCTION(ircclient)
 {
 	unsigned int high, low;
 	char *version[2];
-	char lt16 = "<=1.6";
+	char *lt16 = "<=1.6";
 
 	irc_get_version(&high, &low);
 	spprintf(&version[1], 0, "%u.%u", high, low);
