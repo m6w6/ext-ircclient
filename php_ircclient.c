@@ -32,7 +32,7 @@
 
 #include <errno.h>
 #include <ctype.h>
-#include <libircclient/libircclient.h>
+#include <libircclient.h>
 
 PHP_FUNCTION(parse_origin)
 {
