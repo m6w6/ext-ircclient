@@ -2,8 +2,8 @@ PHP_ARG_WITH(ircclient, for ircclient support,
 	[  --with-ircclient[=LIBIRCCLIENTDIR]   Include ircclient support])
 
 if test "$PHP_IRCCLIENT" != "no"; then
-	AC_PROG_EGREP
-	AC_PROG_SED
+	AC_PATH_PROG(GREP, grep, no)
+	AC_PATH_PROG(SED, sed, no)
 	
 	AC_MSG_CHECKING([for libircclient.h])
 	for d in $PHP_IRCCLIENT /usr /usr/local /opt; do
@@ -24,9 +24,9 @@ if test "$PHP_IRCCLIENT" != "no"; then
 		AC_MSG_ERROR([not found])
 	fi
 	AC_MSG_CHECKING([libircclient version])
-	if test -f "$IRCCLIENT_INCDIR/libirc_params.h"; then
-		PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH=`$EGREP "define LIBIRC_VERSION_HIGH" $IRCCLIENT_INCDIR/libirc_params.h | $SED -e 's/[[^0-9\x]]//g'`
-		PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW=`$EGREP "define LIBIRC_VERSION_LOW" $IRCCLIENT_INCDIR/libirc_params.h | $SED -e 's/[[^0-9\x]]//g'`
+	if test -x $GREP && test -x $SED && test -f "$IRCCLIENT_INCDIR/libirc_params.h"; then
+		PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH=`$GREP "define LIBIRC_VERSION_HIGH" $IRCCLIENT_INCDIR/libirc_params.h | $SED -e 's/[[^0-9\x]]//g'`
+		PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW=`$GREP "define LIBIRC_VERSION_LOW" $IRCCLIENT_INCDIR/libirc_params.h | $SED -e 's/[[^0-9\x]]//g'`
 		AC_MSG_RESULT([$PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH $PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_LOW])
 	else
 		PHP_IRCCLIENT_LIBIRCCLIENT_VERSION_HIGH=0
