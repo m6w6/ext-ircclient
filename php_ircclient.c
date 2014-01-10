@@ -418,7 +418,7 @@ PHP_METHOD(Session, doConnect)
 	if (SUCCESS == zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "bs|ls!", &ip6, &server_str, &server_len, &port, &passwd_str, &passwd_len)) {
 		php_ircclient_session_object_t *obj = zend_object_store_get_object(getThis() TSRMLS_CC);
 		char *nick = NULL, *user = NULL, *real = NULL;
-		zval *znick, *zuser, *zreal, *tmp;
+		zval *znick, *zuser, *zreal;
 
 		znick = zend_read_property(php_ircclient_session_class_entry, getThis(), ZEND_STRL("nick"), 0 TSRMLS_CC);
 		SEPARATE_ARG_IF_REF(znick);
