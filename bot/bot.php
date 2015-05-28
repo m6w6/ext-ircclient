@@ -20,35 +20,40 @@ class Robot extends Session
 		parent::__construct($this->config->nick, $this->config->user, $this->config->real);
 	}
 	
-	function run() {
+	function run($watch_stdin = false) {
 		printf("Connecting to %s...\n", $this->config->host);
 		$this->doConnect($this->config->ipv6, $this->config->host, $this->config->port ?: 6667);
 		
-		for (	stream_set_blocking(STDIN, 0), $i = 0, $x = ["–","\\","|","/"];
-				false !== ($fds = @parent::run(array(STDIN), null, 1));
-				++$i) {
-			if (!$this->isConnected()) {
-				printf("  %s \r", $x[$i%4]);
-			}
-			if ($fds[0]) {
-				switch ($command = fgets(STDIN)) {
-				case "quit\n":
-					$this->disconnect();
-					break 2;
-				case "reload\n":
-					$this->reload();
-					break;
-				case "update\n":
-					$this->update();
-					break;
-				default:
-					$this->doRaw($command);
+		if ($watch_stdin) {
+			for (	stream_set_blocking(STDIN, 0), $i = 0, $x = ["–","\\","|","/"];
+					false !== ($fds = @parent::run(array(STDIN), null, 1));
+					++$i) {
+				if (!$this->isConnected()) {
+					printf("  %s \r", $x[$i%4]);
 				}
-			} else {
+				if ($fds[0]) {
+					switch ($command = fgets(STDIN)) {
+					case "quit\n":
+						$this->disconnect();
+						break 2;
+					case "reload\n":
+						$this->reload();
+						break;
+					case "update\n":
+						$this->update();
+						break;
+					default:
+						$this->doRaw($command);
+					}
+				} else {
+					$this->work();
+				}
+			}
+		} else {
+			while (false !== parent::run(null, null, 1)) {
 				$this->work();
 			}
 		}
-		
 		printf("Bye!\n");
 	}
 	
